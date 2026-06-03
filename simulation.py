@@ -7,6 +7,7 @@ Empirically calibrated using:
 """
 
 import numpy as np
+from scipy import stats   # for confidence intervals
 
 def simulate_scenario(
     H,                       # hallucination rate
@@ -27,8 +28,11 @@ def simulate_scenario(
 
     Returns a dict with:
         mean_fraud_count : average number of fraud events per round
+        std_fraud_count  : standard deviation of fraud events per round
+        ci_low, ci_high  : 95% confidence interval for fraud count
         mean_loss        : average aggregate loss per round
         mean_profit      : average exploiter profit per round (only when active)
+        mean_verif_cost  : average verification cost per round
         exploiter_active : whether the exploiter chose to enter
         fraud_probability: probability a random user falls victim in a round
     """
@@ -61,8 +65,12 @@ def simulate_scenario(
     if not exploiter_active:
         return {
             'mean_fraud_count': 0.0,
+            'std_fraud_count': 0.0,
+            'ci_low': 0.0,
+            'ci_high': 0.0,
             'mean_loss': 0.0,
             'mean_profit': 0.0,
+            'mean_verif_cost': 0.0,
             'exploiter_active': False,
             'fraud_probability': 0.0
         }
@@ -78,6 +86,7 @@ def simulate_scenario(
     fraud_counts = []
     losses = []
     profits = []
+    verification_costs = []
 
     for _ in range(rounds):
         hallucination_this_round = np.random.random() < H
@@ -85,6 +94,7 @@ def simulate_scenario(
             fraud_counts.append(0)
             losses.append(0)
             profits.append(0)
+            verification_costs.append(0.0)
             continue
 
         trust = np.random.beta(a, b, size=N)
@@ -100,16 +110,29 @@ def simulate_scenario(
         fraud_counts.append(fraud_count)
         losses.append(fraud_count * L)
         profits.append(fraud_count * V)
+        # Sum verification costs for users who verified
+        verif_cost_round = np.sum(cost[verify])
+        verification_costs.append(verif_cost_round)
 
     mean_fraud = np.mean(fraud_counts)
+    std_fraud = np.std(fraud_counts, ddof=1)   # sample standard deviation
+    n = len(fraud_counts)
+    sem = stats.sem(fraud_counts)              # standard error of the mean
+    ci_low, ci_high = stats.t.interval(0.95, df=n-1, loc=mean_fraud, scale=sem)
+
     mean_loss = np.mean(losses)
     mean_profit = np.mean(profits)
+    mean_verif_cost = np.mean(verification_costs)
     fraud_prob = mean_fraud / N
 
     return {
         'mean_fraud_count': mean_fraud,
+        'std_fraud_count': std_fraud,
+        'ci_low': ci_low,
+        'ci_high': ci_high,
         'mean_loss': mean_loss,
         'mean_profit': mean_profit,
+        'mean_verif_cost': mean_verif_cost,
         'exploiter_active': True,
         'fraud_probability': fraud_prob
     }
@@ -144,8 +167,8 @@ def main():
 
     # --- Baseline: medium trust (global average 0.46), varying H ---
     print("\nBASELINE SCENARIO: Trust = 0.46 (global average), varying hallucination rate H")
-    print(f"{'H':<8} {'Exploiter active':<18} {'Fraud events':<15} {'Fraud prob':<12} {'Agg loss (£)':<15} {'Exploiter profit (£)':<20}")
-    print("-" * 80)
+    print(f"{'H':<8} {'Active':<8} {'Fraud Events (Mean ± SD)':<28} {'[95% CI]':<20} {'Fraud prob':<12} {'Agg loss (£)':<15} {'Expl profit (£)':<15} {'Verif cost (£)':<15}")
+    print("-" * 110)
     for H in H_empirical:
         res = simulate_scenario(
             H=H, mean_trust=0.46, std_trust=trust_std_empirical,
@@ -154,12 +177,16 @@ def main():
             entry_decision_samples=2000
         )
         active = "Yes" if res['exploiter_active'] else "No"
-        print(f"{H:<8.2f} {active:<18} {res['mean_fraud_count']:<15.2f} {res['fraud_probability']:<12.4f} {res['mean_loss']:<15.2f} {res['mean_profit']:<20.2f}")
+        mean_f = res['mean_fraud_count']
+        std_f = res['std_fraud_count']
+        ci_low = res['ci_low']
+        ci_high = res['ci_high']
+        print(f"{H:<8.2f} {active:<8} {mean_f:<15.2f} ± {std_f:<10.2f}       [{ci_low:.2f}, {ci_high:.2f}] {res['fraud_probability']:<12.4f} {res['mean_loss']:<15.2f} {res['mean_profit']:<15.2f} {res['mean_verif_cost']:<15.2f}")
 
     # --- Trust sensitivity: medium hallucination H=0.55, varying T ---
     print("\nTRUST SENSITIVITY: H = 0.55 (medium hallucination), varying trust T")
-    print(f"{'Mean trust':<12} {'Exploiter active':<18} {'Fraud events':<15} {'Fraud prob':<12} {'Agg loss (£)':<15}")
-    print("-" * 80)
+    print(f"{'Mean trust':<12} {'Active':<8} {'Fraud Events (Mean ± SD)':<28} {'[95% CI]':<20} {'Fraud prob':<12} {'Agg loss (£)':<15} {'Verif cost (£)':<15}")
+    print("-" * 100)
     for mu in T_empirical:
         res = simulate_scenario(
             H=0.55, mean_trust=mu, std_trust=trust_std_empirical,
@@ -168,12 +195,16 @@ def main():
             entry_decision_samples=2000
         )
         active = "Yes" if res['exploiter_active'] else "No"
-        print(f"{mu:<12.2f} {active:<18} {res['mean_fraud_count']:<15.2f} {res['fraud_probability']:<12.4f} {res['mean_loss']:<15.2f}")
+        mean_f = res['mean_fraud_count']
+        std_f = res['std_fraud_count']
+        ci_low = res['ci_low']
+        ci_high = res['ci_high']
+        print(f"{mu:<12.2f} {active:<8} {mean_f:<15.2f} ± {std_f:<10.2f}       [{ci_low:.2f}, {ci_high:.2f}] {res['fraud_probability']:<12.4f} {res['mean_loss']:<15.2f} {res['mean_verif_cost']:<15.2f}")
 
     # --- Verification cost sensitivity: medium H=0.55, medium T=0.46 ---
     print("\nVERIFICATION COST SENSITIVITY: H = 0.55, trust = 0.46")
-    print(f"{'Cost scenario':<15} {'Exploiter active':<18} {'Fraud events':<15} {'Fraud prob':<12} {'Agg loss (£)':<15}")
-    print("-" * 80)
+    print(f"{'Cost scenario':<15} {'Active':<8} {'Fraud Events (Mean ± SD)':<28} {'[95% CI]':<20} {'Fraud prob':<12} {'Agg loss (£)':<15} {'Verif cost (£)':<15}")
+    print("-" * 100)
 
     cost_ranges = [
         ("Low (0.05-0.25)", 0.05, 0.25),
@@ -188,7 +219,34 @@ def main():
             entry_decision_samples=2000
         )
         active = "Yes" if res['exploiter_active'] else "No"
-        print(f"{name:<15} {active:<18} {res['mean_fraud_count']:<15.2f} {res['fraud_probability']:<12.4f} {res['mean_loss']:<15.2f}")
+        mean_f = res['mean_fraud_count']
+        std_f = res['std_fraud_count']
+        ci_low = res['ci_low']
+        ci_high = res['ci_high']
+        print(f"{name:<15} {active:<8} {mean_f:<15.2f} ± {std_f:<10.2f}       [{ci_low:.2f}, {ci_high:.2f}] {res['fraud_probability']:<12.4f} {res['mean_loss']:<15.2f} {res['mean_verif_cost']:<15.2f}")
+
+    # --- Exploiter parameter sensitivity: vary F and V ---
+    print("\nEXPLOITER PARAMETER SENSITIVITY: H = 0.55, Trust = 0.46")
+    print(f"{'F (£)':<8} {'V':<6} {'Active':<8} {'Fraud Events (Mean ± SD)':<28} {'[95% CI]':<20} {'Agg loss (£)':<15} {'Expl profit (£)':<15} {'Verif cost (£)':<15}")
+    print("-" * 120)
+
+    F_values = [10, 50, 200, 500]
+    V_values = [0.5, 0.7, 0.9]
+
+    for F_val in F_values:
+        for V_val in V_values:
+            res = simulate_scenario(
+                H=0.55, mean_trust=0.46, std_trust=trust_std_empirical,
+                c_min=0.1, c_max=0.5, N=N_empirical, rounds=rounds_empirical,
+                R=R_empirical, L=L_empirical, V=V_val, F=F_val,
+                entry_decision_samples=2000
+            )
+            active = "Yes" if res['exploiter_active'] else "No"
+            mean_f = res['mean_fraud_count']
+            std_f = res['std_fraud_count']
+            ci_low = res['ci_low']
+            ci_high = res['ci_high']
+            print(f"{F_val:<8} {V_val:<6} {active:<8} {mean_f:<15.2f} ± {std_f:<10.2f}       [{ci_low:.2f}, {ci_high:.2f}] {res['mean_loss']:<15.2f} {res['mean_profit']:<15.2f} {res['mean_verif_cost']:<15.2f}")
 
     print("\n" + "=" * 80)
     print("Simulation complete.")
